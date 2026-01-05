@@ -1,0 +1,12 @@
+{
+  "name": "NotesSync - Offline Notes with Cloud Sync",
+  "short_name": "NotesSync",
+  "description": "A powerful offline-first PWA for managing your notes with automatic cloud synchronization",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f8f7f6",
+  "theme_color": "#8663f9",
+  "categories": ["productivity"]
+}
