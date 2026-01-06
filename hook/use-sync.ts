@@ -7,7 +7,11 @@ import {
   registerBackgroundSync,
   pullNotesFromServer,
 } from "@/lib/sync";
-import { getAllNotes, updateNote as updateNoteLocal } from "@/lib/db";
+import {
+  getAllNotes,
+  updateNote as updateNoteLocal,
+  getUnsyncedNotesCount,
+} from "@/lib/db";
 
 const USER_ID = "emmanueltemitopedorcas20@gmail.com";
 
@@ -25,20 +29,29 @@ export function useSync() {
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isSyncingRef = useRef(false); // Prevent duplicate syncs
 
   const performSync = useCallback(async () => {
     if (!navigator.onLine) {
-      console.log("[v0] Offline, skipping sync");
+      console.log("[useSync] Offline, skipping sync");
+      setSyncStatus("pending");
+      return;
+    }
+
+    // Prevent duplicate syncs
+    if (isSyncingRef.current) {
+      console.log("[useSync] Sync already in progress, skipping");
       return;
     }
 
     try {
+      isSyncingRef.current = true;
       setSyncStatus("syncing");
       setSyncError(null);
 
       // Sync local changes to server
       const syncResult = await syncNotesWithServer();
-      console.log("[v0] Sync result:", syncResult);
+      console.log("[useSync] Sync result:", syncResult);
 
       // Pull any updates from server
       const serverNotes = await pullNotesFromServer();
@@ -49,22 +62,22 @@ export function useSync() {
         const localNote = localNotes.find((n) => n.id === serverNote.id);
         if (!localNote) {
           // New note from server
-          await updateNoteLocal(serverNote);
+          await updateNoteLocal({ ...serverNote, synced: true });
         } else {
           const serverTime = new Date(serverNote.modified_at).getTime();
           const localTime = new Date(localNote.modified_at).getTime();
           if (serverTime > localTime) {
             // Server version is newer
-            await updateNoteLocal(serverNote);
+            await updateNoteLocal({ ...serverNote, synced: true });
           }
         }
       }
 
       setLastSyncTime(new Date());
       setSyncStatus("synced");
-      console.log("[v0] Sync completed successfully");
+      console.log("[useSync] Sync completed successfully");
     } catch (error) {
-      console.error("[v0] Sync error:", error);
+      console.error("[useSync] Sync error:", error);
       setSyncError(error instanceof Error ? error.message : "Sync failed");
       setSyncStatus("error");
 
@@ -72,6 +85,8 @@ export function useSync() {
       setTimeout(() => {
         setSyncStatus("pending");
       }, 5000);
+    } finally {
+      isSyncingRef.current = false;
     }
   }, []);
 
@@ -80,25 +95,47 @@ export function useSync() {
     registerBackgroundSync();
   }, []);
 
+  // Check initial status
+  useEffect(() => {
+    const checkInitialStatus = async () => {
+      if (!navigator.onLine) {
+        setSyncStatus("pending");
+        return;
+      }
+
+      try {
+        const count = await getUnsyncedNotesCount();
+        if (count > 0) {
+          console.log(
+            `[useSync] ${count} unsynced notes found, marking as pending`
+          );
+          setSyncStatus("pending");
+        } else {
+          setSyncStatus("synced");
+        }
+      } catch (error) {
+        console.error("[useSync] Error checking unsynced notes:", error);
+      }
+    };
+
+    checkInitialStatus();
+  }, []);
+
   // Handle online/offline events
   useEffect(() => {
     const handleOnline = () => {
-      console.log("[v0] Coming online, triggering sync...");
+      console.log("[useSync] Coming online, triggering sync...");
       setSyncStatus("syncing");
       performSync();
     };
 
     const handleOffline = () => {
-      console.log("[v0] Going offline");
+      console.log("[useSync] Going offline");
       setSyncStatus("pending");
     };
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
-
-    // if (!navigator.onLine) {
-    //   setSyncStatus("pending");
-    // }
 
     return () => {
       window.removeEventListener("online", handleOnline);
@@ -106,12 +143,46 @@ export function useSync() {
     };
   }, [performSync]);
 
+  // Listen for custom sync events (dispatched by sync.ts and storage-hook.ts)
+  useEffect(() => {
+    const handleSyncStart = () => {
+      console.log("[useSync] Custom event: sync:start");
+      setSyncStatus("syncing");
+      setSyncError(null);
+    };
+
+    const handleSyncComplete = ((event: CustomEvent) => {
+      console.log("[useSync] Custom event: sync:complete", event.detail);
+      setSyncStatus("synced");
+      setLastSyncTime(new Date());
+      setSyncError(null);
+      isSyncingRef.current = false;
+    }) as EventListener;
+
+    const handleSyncError = ((event: CustomEvent) => {
+      console.log("[useSync] Custom event: sync:error", event.detail);
+      setSyncStatus("error");
+      setSyncError(event.detail?.message || "Sync failed");
+      isSyncingRef.current = false;
+    }) as EventListener;
+
+    window.addEventListener("sync:start", handleSyncStart);
+    window.addEventListener("sync:complete", handleSyncComplete);
+    window.addEventListener("sync:error", handleSyncError);
+
+    return () => {
+      window.removeEventListener("sync:start", handleSyncStart);
+      window.removeEventListener("sync:complete", handleSyncComplete);
+      window.removeEventListener("sync:error", handleSyncError);
+    };
+  }, []);
+
   // Listen for sync messages from service worker
   useEffect(() => {
     if ("serviceWorker" in navigator) {
       const handleMessage = (event: MessageEventWithData) => {
         if (event.data.type === "SYNC_START") {
-          console.log("[v0] Service worker triggered sync");
+          console.log("[useSync] Service worker triggered sync");
           performSync();
         }
       };
@@ -139,6 +210,31 @@ export function useSync() {
       };
     }
   }, [syncStatus, performSync]);
+
+  // Periodically check for unsynced notes
+  useEffect(() => {
+    const checkUnsyncedNotes = async () => {
+      // Only check if we think we're synced
+      if (syncStatus === "synced" && navigator.onLine) {
+        try {
+          const count = await getUnsyncedNotesCount();
+          if (count > 0) {
+            console.log(
+              `[useSync] Found ${count} unsynced notes, updating status to pending`
+            );
+            setSyncStatus("pending");
+          }
+        } catch (error) {
+          console.error("[useSync] Error checking unsynced notes:", error);
+        }
+      }
+    };
+
+    // Check every 5 seconds
+    const intervalId = setInterval(checkUnsyncedNotes, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [syncStatus]);
 
   return {
     syncStatus,

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import type { Note } from "@/types/note";
 
 const DB_NAME = "NotesSync";
@@ -258,6 +257,19 @@ export async function getUnsyncedNotesCount(): Promise<number> {
 
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
+  });
+}
+
+export async function getAllUnsyncedNotes(): Promise<Note[]> {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readonly");
+    const store = transaction.objectStore(STORE_NAME);
+    const index = store.index("synced");
+    const request = index.getAll(IDBKeyRange.only(false));
+
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result as Note[]);
   });
 }
 

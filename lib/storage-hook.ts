@@ -1,6 +1,7 @@
+// lib/storage-hook.ts - FIXED WITH PROPER STATE UPDATES
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import type { Note } from "@/types/note";
 import { getAllNotes, addNote, updateNote, deleteNote } from "./db";
 import { syncNotesWithServer, pullNotesFromServer } from "./sync";
@@ -12,6 +13,18 @@ export function useNotes() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const syncTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+
+  // Reload notes from IndexedDB
+  const reloadNotesFromDB = useCallback(async () => {
+    try {
+      const loadedNotes = await getAllNotes(USER_ID);
+      setNotes(loadedNotes);
+      console.log("[NotesSync] Notes reloaded from IndexedDB");
+    } catch (err) {
+      console.error("[NotesSync] Error reloading notes:", err);
+    }
+  }, []);
 
   // Load all notes on mount
   useEffect(() => {
@@ -59,7 +72,10 @@ export function useNotes() {
   }, []);
 
   const syncNotes = useCallback(async () => {
-    if (syncing) return; // Prevent concurrent syncs
+    if (syncing) {
+      console.log("[NotesSync] Sync already in progress, skipping");
+      return;
+    }
 
     try {
       setSyncing(true);
@@ -83,17 +99,15 @@ export function useNotes() {
             await addNote(noteWithSyncStatus);
           }
         }
-
-        // Reload to show merged data
-        const updatedNotes = await getAllNotes(USER_ID);
-        setNotes(updatedNotes);
       }
+      // CRITICAL: Reload notes from IndexedDB to reflect sync status changes
+      await reloadNotesFromDB();
     } catch (err) {
       console.error("[NotesSync] Sync error:", err);
     } finally {
       setSyncing(false);
     }
-  }, [syncing]);
+  }, [syncing, reloadNotesFromDB]);
 
   const createNote = useCallback(
     async (note: Note) => {
@@ -101,12 +115,20 @@ export function useNotes() {
         // Save to IndexedDB first (instant for user)
         await addNote(note);
 
-        // Update UI immediately
+        // Update UI immediately with unsynced status
         setNotes((prev) => [note, ...prev]);
 
         // Try to sync with server in background if online
         if (navigator.onLine) {
-          syncNotes();
+          // Clear any existing timeout
+          if (syncTimeoutRef.current) {
+            clearTimeout(syncTimeoutRef.current);
+          }
+
+          // Sync after a short delay to batch operations
+          syncTimeoutRef.current = setTimeout(async () => {
+            await syncNotes();
+          }, 500);
         }
 
         return note;
@@ -127,14 +149,22 @@ export function useNotes() {
         // Save to IndexedDB first
         await updateNote(unsyncedNote);
 
-        // Update UI immediately
+        // Update UI immediately with unsynced status
         setNotes((prev) =>
           prev.map((n) => (n.id === note.id ? unsyncedNote : n))
         );
 
         // Try to sync with server in background if online
         if (navigator.onLine) {
-          syncNotes();
+          // Clear any existing timeout
+          if (syncTimeoutRef.current) {
+            clearTimeout(syncTimeoutRef.current);
+          }
+
+          // Sync after a short delay to batch operations
+          syncTimeoutRef.current = setTimeout(async () => {
+            await syncNotes();
+          }, 500);
         }
       } catch (err) {
         console.error("[NotesSync] Error updating note:", err);
@@ -155,7 +185,15 @@ export function useNotes() {
 
         // Try to sync with server in background if online
         if (navigator.onLine) {
-          syncNotes();
+          // Clear any existing timeout
+          if (syncTimeoutRef.current) {
+            clearTimeout(syncTimeoutRef.current);
+          }
+
+          // Sync after a short delay
+          syncTimeoutRef.current = setTimeout(async () => {
+            await syncNotes();
+          }, 500);
         }
       } catch (err) {
         console.error("[NotesSync] Error deleting note:", err);
@@ -164,6 +202,15 @@ export function useNotes() {
     },
     [syncNotes]
   );
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return {
     notes,
