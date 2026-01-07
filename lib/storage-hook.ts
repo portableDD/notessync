@@ -13,7 +13,8 @@ export function useNotes() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
-  const hasLoadedRef = useRef(false); // Prevent multiple initial loads
+  const hasLoadedRef = useRef(false);
+  const isSyncingRef = useRef(false);
 
   // Reload notes from IndexedDB
   const reloadNotesFromDB = useCallback(async () => {
@@ -31,30 +32,43 @@ export function useNotes() {
 
   // Sync notes with server
   const syncNotes = useCallback(async () => {
-    if (syncing) {
+    if (isSyncingRef.current) {
       console.log("[NotesSync] Sync already in progress, skipping");
       return;
     }
 
+    if (!navigator.onLine) {
+      console.log("[NotesSync] Offline, skipping sync");
+      return;
+    }
+
     try {
+      isSyncingRef.current = true;
       setSyncing(true);
 
-      // Sync pending local changes to server
-      const syncResult = await syncNotesWithServer();
-      console.log("[NotesSync] Sync result:", syncResult);
+      console.log("[NotesSync] Starting sync process...");
 
-      // Reload notes from IndexedDB to reflect sync status changes
+      // Step 1: Push local changes to server
+      const syncResult = await syncNotesWithServer();
+      console.log("[NotesSync] Push sync result:", syncResult);
+
+      // Step 2: Pull updates from server
+      await pullNotesFromServer();
+
+      // Step 3: Reload notes from IndexedDB to reflect all changes
       await reloadNotesFromDB();
+
+      console.log("[NotesSync] Sync completed successfully");
     } catch (err) {
       console.error("[NotesSync] Sync error:", err);
     } finally {
       setSyncing(false);
+      isSyncingRef.current = false;
     }
-  }, [syncing, reloadNotesFromDB]);
+  }, [reloadNotesFromDB]);
 
-  // Load notes - FIXED: Only runs once on mount
+  // Load notes - runs once on mount
   const loadNotes = useCallback(async () => {
-    // Prevent multiple loads
     if (hasLoadedRef.current) {
       console.log("[NotesSync] Already loaded, skipping");
       return;
@@ -64,54 +78,40 @@ export function useNotes() {
       setLoading(true);
       hasLoadedRef.current = true;
 
+      console.log("[NotesSync] Initial load starting...");
+
+      // Always pull from server first if online
       if (navigator.onLine) {
-        console.log("[NotesSync] Online - pulling from server first...");
-
-        // Pull notes from server (adds synced: true automatically in api.ts)
+        console.log("[NotesSync] Online - pulling from server...");
         await pullNotesFromServer();
-
-        // Load from IndexedDB to display
-        const localNotes = await getAllNotes(USER_ID);
-        console.log(
-          `[NotesSync] Loaded ${localNotes.length} notes from IndexedDB after pull`
-        );
-
-        // Log each note's sync status for debugging
-        localNotes.forEach((note) => {
-          console.log(
-            `[NotesSync] Note "${note.title}" (${note.id.slice(
-              0,
-              8
-            )}...) synced:`,
-            note.synced
-          );
-        });
-
-        setNotes(localNotes);
-
-        // Push any unsynced local changes to server
-        await syncNotes();
       } else {
         console.log("[NotesSync] Offline - using local data only");
-        const localNotes = await getAllNotes(USER_ID);
-        console.log(
-          `[NotesSync] Loaded ${localNotes.length} notes from IndexedDB`
-        );
-        setNotes(localNotes);
+      }
+
+      // Load from IndexedDB
+      const localNotes = await getAllNotes(USER_ID);
+      console.log(
+        `[NotesSync] Loaded ${localNotes.length} notes from IndexedDB`
+      );
+      setNotes(localNotes);
+
+      // If online, sync any pending changes
+      if (navigator.onLine) {
+        await syncNotes();
       }
     } catch (err) {
       console.error("[NotesSync] Error loading notes:", err);
       setError(err instanceof Error ? err : new Error("Failed to load notes"));
-      hasLoadedRef.current = false; // Allow retry on error
+      hasLoadedRef.current = false;
     } finally {
       setLoading(false);
     }
-  }, []); // Empty deps - only create once
+  }, [syncNotes]);
 
-  // Load all notes on mount - FIXED: No deps array to prevent re-running
+  // Load notes on mount
   useEffect(() => {
     loadNotes();
-  }, []); // Only run once on mount
+  }, []);
 
   // Listen for online/offline events
   useEffect(() => {
@@ -136,21 +136,25 @@ export function useNotes() {
   const createNote = useCallback(
     async (note: Note) => {
       try {
+        console.log("[NotesSync] Creating note:", note.id);
+
         // Save to IndexedDB first (instant for user)
         await addNote(note);
 
-        // Update UI immediately with unsynced status
+        // Update UI immediately
         setNotes((prev) => [note, ...prev]);
 
-        // Try to sync with server in background if online
+        // Sync with server immediately if online
         if (navigator.onLine) {
+          // Clear any pending timeout
           if (syncTimeoutRef.current) {
             clearTimeout(syncTimeoutRef.current);
           }
 
-          syncTimeoutRef.current = setTimeout(async () => {
-            await syncNotes();
-          }, 500);
+          // Sync immediately for create operations
+          await syncNotes();
+        } else {
+          console.log("[NotesSync] Offline - note will sync when online");
         }
 
         return note;
@@ -165,18 +169,20 @@ export function useNotes() {
   const modifyNote = useCallback(
     async (note: Note) => {
       try {
+        console.log("[NotesSync] Updating note:", note.id);
+
         // Mark as unsynced
         const unsyncedNote = { ...note, synced: false };
 
         // Save to IndexedDB first
         await updateNote(unsyncedNote);
 
-        // Update UI immediately with unsynced status
+        // Update UI immediately
         setNotes((prev) =>
           prev.map((n) => (n.id === note.id ? unsyncedNote : n))
         );
 
-        // Try to sync with server in background if online
+        // Debounce sync for update operations (500ms)
         if (navigator.onLine) {
           if (syncTimeoutRef.current) {
             clearTimeout(syncTimeoutRef.current);
@@ -185,6 +191,8 @@ export function useNotes() {
           syncTimeoutRef.current = setTimeout(async () => {
             await syncNotes();
           }, 500);
+        } else {
+          console.log("[NotesSync] Offline - note will sync when online");
         }
       } catch (err) {
         console.error("[NotesSync] Error updating note:", err);
@@ -197,21 +205,25 @@ export function useNotes() {
   const removeNote = useCallback(
     async (id: string) => {
       try {
+        console.log("[NotesSync] Deleting note:", id);
+
         // Delete from IndexedDB
         await deleteNote(id, USER_ID);
 
         // Update UI immediately
         setNotes((prev) => prev.filter((n) => n.id !== id));
 
-        // Try to sync with server in background if online
+        // Sync with server immediately if online
         if (navigator.onLine) {
+          // Clear any pending timeout
           if (syncTimeoutRef.current) {
             clearTimeout(syncTimeoutRef.current);
           }
 
-          syncTimeoutRef.current = setTimeout(async () => {
-            await syncNotes();
-          }, 500);
+          // Sync immediately for delete operations
+          await syncNotes();
+        } else {
+          console.log("[NotesSync] Offline - deletion will sync when online");
         }
       } catch (err) {
         console.error("[NotesSync] Error deleting note:", err);

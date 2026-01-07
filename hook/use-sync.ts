@@ -7,13 +7,7 @@ import {
   registerBackgroundSync,
   pullNotesFromServer,
 } from "@/lib/sync";
-import {
-  getAllNotes,
-  updateNote as updateNoteLocal,
-  getUnsyncedNotesCount,
-} from "@/lib/db";
-
-const USER_ID = "emmanueltemitopedorcas20@gmail.com";
+import { getUnsyncedNotesCount } from "@/lib/db";
 
 type SyncStatus = "synced" | "syncing" | "pending" | "error";
 
@@ -29,7 +23,7 @@ export function useSync() {
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isSyncingRef = useRef(false); // Prevent duplicate syncs
+  const isSyncingRef = useRef(false);
   const lastOnlineCheckRef = useRef<number>(Date.now());
 
   const performSync = useCallback(async () => {
@@ -50,29 +44,14 @@ export function useSync() {
       setSyncStatus("syncing");
       setSyncError(null);
 
-      // Sync local changes to server
+      console.log("[useSync] Starting sync...");
+
+      // Step 1: Sync local changes to server
       const syncResult = await syncNotesWithServer();
       console.log("[useSync] Sync result:", syncResult);
 
-      // Pull any updates from server
-      const serverNotes = await pullNotesFromServer();
-
-      // Merge server notes with local notes (server version wins for conflicts)
-      const localNotes = await getAllNotes(USER_ID);
-      for (const serverNote of serverNotes) {
-        const localNote = localNotes.find((n) => n.id === serverNote.id);
-        if (!localNote) {
-          // New note from server
-          await updateNoteLocal({ ...serverNote, synced: true });
-        } else {
-          const serverTime = new Date(serverNote.modified_at).getTime();
-          const localTime = new Date(localNote.modified_at).getTime();
-          if (serverTime > localTime) {
-            // Server version is newer
-            await updateNoteLocal({ ...serverNote, synced: true });
-          }
-        }
-      }
+      // Step 2: Pull any updates from server
+      await pullNotesFromServer();
 
       setLastSyncTime(new Date());
       setSyncStatus("synced");
@@ -144,7 +123,7 @@ export function useSync() {
     };
   }, [performSync]);
 
-  // Listen for custom sync events (dispatched by sync.ts and storage-hook.ts)
+  // Listen for custom sync events
   useEffect(() => {
     const handleSyncStart = () => {
       console.log("[useSync] Custom event: sync:start");
@@ -195,16 +174,15 @@ export function useSync() {
     }
   }, [performSync]);
 
-  // Periodic sync every 30 seconds when online - WITH DEBOUNCE
+  // Periodic sync every 30 seconds when online
   useEffect(() => {
     if (navigator.onLine) {
       syncIntervalRef.current = setInterval(() => {
-        // Only sync if not already syncing and enough time has passed
         if (syncStatus !== "syncing" && !isSyncingRef.current) {
           const now = Date.now();
           const timeSinceLastCheck = now - lastOnlineCheckRef.current;
 
-          // Add debounce - only check if at least 25 seconds have passed
+          // Debounce - only sync if at least 25 seconds have passed
           if (timeSinceLastCheck >= 25000) {
             lastOnlineCheckRef.current = now;
             performSync();
@@ -220,7 +198,7 @@ export function useSync() {
     }
   }, [syncStatus, performSync]);
 
-  // IMPROVED: Check for unsynced notes less aggressively
+  // Check for unsynced notes periodically
   useEffect(() => {
     const checkUnsyncedNotes = async () => {
       // Only check if we think we're synced AND we're online AND not currently syncing
@@ -243,7 +221,7 @@ export function useSync() {
       }
     };
 
-    // REDUCED FREQUENCY: Check every 10 seconds instead of 5
+    // Check every 10 seconds
     const intervalId = setInterval(checkUnsyncedNotes, 10000);
 
     return () => clearInterval(intervalId);
