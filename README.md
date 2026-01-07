@@ -36,7 +36,7 @@ Create a `.env.local` file:
 
 ```
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
 ### 3. Run Development Server

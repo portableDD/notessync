@@ -247,29 +247,43 @@ export async function removeSyncQueueItem(id: number): Promise<void> {
   });
 }
 
+// FIXED: Count unsynced notes by manually filtering instead of using IDBKeyRange.only()
 export async function getUnsyncedNotesCount(): Promise<number> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, "readonly");
     const store = transaction.objectStore(STORE_NAME);
-    const index = store.index("synced");
-    const request = index.count(IDBKeyRange.only(false));
+    const request = store.getAll();
 
     request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const allNotes = request.result as Note[];
+      // Manually filter for unsynced notes
+      const unsyncedCount = allNotes.filter(
+        (note) => note.synced === false
+      ).length;
+      console.log(`[NotesSync] Found ${unsyncedCount} unsynced notes`);
+      resolve(unsyncedCount);
+    };
   });
 }
 
+// FIXED: Get all unsynced notes by manually filtering instead of using IDBKeyRange.only()
 export async function getAllUnsyncedNotes(): Promise<Note[]> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, "readonly");
     const store = transaction.objectStore(STORE_NAME);
-    const index = store.index("synced");
-    const request = index.getAll(IDBKeyRange.only(false));
+    const request = store.getAll();
 
     request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result as Note[]);
+    request.onsuccess = () => {
+      const allNotes = request.result as Note[];
+      // Manually filter for unsynced notes
+      const unsyncedNotes = allNotes.filter((note) => note.synced === false);
+      console.log(`[NotesSync] Found ${unsyncedNotes.length} unsynced notes`);
+      resolve(unsyncedNotes);
+    };
   });
 }
 

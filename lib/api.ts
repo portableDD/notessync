@@ -3,7 +3,7 @@ import type { Note } from "@/types/note";
 
 // Validate environment variables
 const API_BASE = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const API_KEY = process.env.SUPABASE_ANON_KEY;
+const API_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
 if (!API_BASE || !API_KEY) {
   console.error("❌ Missing environment variables:", {

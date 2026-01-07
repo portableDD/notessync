@@ -12,10 +12,10 @@ export default function Home() {
       navigator.serviceWorker
         .register("/sw.js")
         .then((registration) => {
-          console.log("[v0] Service Worker registered:", registration);
+          console.log("Service Worker registered:", registration);
         })
         .catch((error) => {
-          console.warn("[v0] Service Worker registration failed:", error);
+          console.warn(" Service Worker registration failed:", error);
         });
     }
 
@@ -24,7 +24,7 @@ export default function Home() {
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
       deferredPrompt = e;
-      console.log("[v0] PWA install prompt available");
+      console.log(" PWA install prompt available");
     });
 
     return () => {
