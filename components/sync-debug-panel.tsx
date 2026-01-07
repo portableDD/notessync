@@ -63,13 +63,13 @@ export function SyncDebugPanel() {
     };
   }, [isOpen, refreshDebugInfo]);
 
-  // Only show in development or if URL has ?debug=true
-  const shouldShow =
-    process.env.NODE_ENV === "development" ||
-    (typeof window !== "undefined" &&
-      window.location.search.includes("debug=true"));
+//   // Only show in development or if URL has ?debug=true
+//   const shouldShow =
+//     process.env.NODE_ENV === "development" ||
+//     (typeof window !== "undefined" &&
+//       window.location.search.includes("debug=true"));
 
-  if (!shouldShow) return null;
+//   if (!shouldShow) return null;
 
   return (
     <div className="fixed bottom-20 right-4 z-50">
