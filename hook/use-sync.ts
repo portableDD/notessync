@@ -30,6 +30,7 @@ export function useSync() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isSyncingRef = useRef(false); // Prevent duplicate syncs
+  const lastOnlineCheckRef = useRef<number>(Date.now());
 
   const performSync = useCallback(async () => {
     if (!navigator.onLine) {
@@ -194,12 +195,20 @@ export function useSync() {
     }
   }, [performSync]);
 
-  // Periodic sync every 30 seconds when online
+  // Periodic sync every 30 seconds when online - WITH DEBOUNCE
   useEffect(() => {
     if (navigator.onLine) {
       syncIntervalRef.current = setInterval(() => {
-        if (syncStatus !== "syncing") {
-          performSync();
+        // Only sync if not already syncing and enough time has passed
+        if (syncStatus !== "syncing" && !isSyncingRef.current) {
+          const now = Date.now();
+          const timeSinceLastCheck = now - lastOnlineCheckRef.current;
+
+          // Add debounce - only check if at least 25 seconds have passed
+          if (timeSinceLastCheck >= 25000) {
+            lastOnlineCheckRef.current = now;
+            performSync();
+          }
         }
       }, 30000);
 
@@ -211,11 +220,15 @@ export function useSync() {
     }
   }, [syncStatus, performSync]);
 
-  // Periodically check for unsynced notes
+  // IMPROVED: Check for unsynced notes less aggressively
   useEffect(() => {
     const checkUnsyncedNotes = async () => {
-      // Only check if we think we're synced
-      if (syncStatus === "synced" && navigator.onLine) {
+      // Only check if we think we're synced AND we're online AND not currently syncing
+      if (
+        syncStatus === "synced" &&
+        navigator.onLine &&
+        !isSyncingRef.current
+      ) {
         try {
           const count = await getUnsyncedNotesCount();
           if (count > 0) {
@@ -230,8 +243,8 @@ export function useSync() {
       }
     };
 
-    // Check every 5 seconds
-    const intervalId = setInterval(checkUnsyncedNotes, 5000);
+    // REDUCED FREQUENCY: Check every 10 seconds instead of 5
+    const intervalId = setInterval(checkUnsyncedNotes, 10000);
 
     return () => clearInterval(intervalId);
   }, [syncStatus]);
