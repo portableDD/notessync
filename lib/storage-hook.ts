@@ -19,7 +19,10 @@ export function useNotes() {
     try {
       const loadedNotes = await getAllNotes(USER_ID);
       setNotes(loadedNotes);
-      console.log("[NotesSync] Notes reloaded from IndexedDB");
+      console.log(
+        "[NotesSync] Notes reloaded from IndexedDB:",
+        loadedNotes.length
+      );
     } catch (err) {
       console.error("[NotesSync] Error reloading notes:", err);
     }
@@ -56,41 +59,23 @@ export function useNotes() {
 
       // Load from local IndexedDB first (instant)
       const localNotes = await getAllNotes(USER_ID);
+      console.log(
+        `[NotesSync] Loaded ${localNotes.length} notes from IndexedDB`
+      );
       setNotes(localNotes);
 
       // Then sync with server if online
       if (navigator.onLine) {
-        console.log("[NotesSync] Online - fetching from server...");
+        console.log("[NotesSync] Online - pulling from server and syncing...");
 
-        // Pull notes from server
-        const serverNotes = await pullNotesFromServer();
-
-        // Add server notes to local IndexedDB if they don't exist
-        for (const serverNote of serverNotes) {
-          const localNote = localNotes.find((n) => n.id === serverNote.id);
-
-          if (!localNote) {
-            // New note from server - add to local
-            console.log(
-              `[NotesSync] Adding server note ${serverNote.id} to local`
-            );
-            const noteWithSyncStatus = { ...serverNote, synced: true };
-            await addNote(noteWithSyncStatus);
-          } else if (
-            new Date(serverNote.modified_at).getTime() >
-            new Date(localNote.modified_at).getTime()
-          ) {
-            // Server version is newer - update local
-            console.log(
-              `[NotesSync] Updating local note ${serverNote.id} with server version`
-            );
-            const noteWithSyncStatus = { ...serverNote, synced: true };
-            await updateNote(noteWithSyncStatus);
-          }
-        }
+        // Pull notes from server (this will automatically add/update in IndexedDB)
+        await pullNotesFromServer();
 
         // Push any unsynced local changes to server
         await syncNotes();
+
+        // Reload to get the updated synced status
+        await reloadNotesFromDB();
       } else {
         console.log("[NotesSync] Offline - using local data only");
       }
@@ -100,7 +85,7 @@ export function useNotes() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [reloadNotesFromDB]);
 
   const syncNotes = useCallback(async () => {
     if (syncing) {
@@ -115,22 +100,6 @@ export function useNotes() {
       const syncResult = await syncNotesWithServer();
       console.log("[NotesSync] Sync result:", syncResult);
 
-      // Pull latest notes from server
-      const serverNotes = await pullNotesFromServer();
-
-      // Merge server notes with local
-      if (serverNotes.length > 0) {
-        const localNotes = await getAllNotes(USER_ID);
-        const localNotesMap = new Map(localNotes.map((n) => [n.id, n]));
-
-        // Add server notes that don't exist locally
-        for (const serverNote of serverNotes) {
-          if (!localNotesMap.has(serverNote.id)) {
-            const noteWithSyncStatus = { ...serverNote, synced: true };
-            await addNote(noteWithSyncStatus);
-          }
-        }
-      }
       // CRITICAL: Reload notes from IndexedDB to reflect sync status changes
       await reloadNotesFromDB();
     } catch (err) {
@@ -255,6 +224,7 @@ export function useNotes() {
     syncNotes,
   };
 }
+
 // "use client";
 
 // import { useEffect, useState, useCallback } from "react";

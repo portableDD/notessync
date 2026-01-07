@@ -5,6 +5,8 @@ import {
   removeSyncQueueItem,
   updateNote as updateNoteLocal,
   getAllNotes,
+  addNote as addNoteLocal,
+  deleteNote,
 } from "./db";
 import {
   fetchNotes,
@@ -26,7 +28,7 @@ export async function syncNotesWithServer(): Promise<{
 
   try {
     console.log("[NotesSync] Starting sync with server...");
-    
+
     // Dispatch sync start event
     window.dispatchEvent(new CustomEvent("sync:start"));
 
@@ -52,24 +54,24 @@ export async function syncNotesWithServer(): Promise<{
         // Check for conflicts before sync (except for delete)
         if (operation !== "delete") {
           const conflictingNote = await checkConflict(note);
-          
+
           if (conflictingNote) {
             console.log(`[NotesSync] Conflict detected for note ${note.id}`);
-            
+
             // Resolve conflict using local-wins strategy
             const resolvedNote = getResolutionStrategy(
               note,
               conflictingNote,
               "local-wins"
             );
-            
+
             // Update server with resolved version
             await updateNoteOnServer(resolvedNote);
-            
+
             // Update local with resolved version
             const syncedNote: Note = { ...resolvedNote, synced: true };
             await updateNoteLocal(syncedNote);
-            
+
             stats.conflicts++;
             await removeSyncQueueItem(item.id);
             continue;
@@ -84,14 +86,14 @@ export async function syncNotesWithServer(): Promise<{
             const createdNote: Note = { ...note, synced: true };
             await updateNoteLocal(createdNote);
             break;
-            
+
           case "update":
             await updateNoteOnServer(note);
             // Mark as synced in local database
             const updatedNote: Note = { ...note, synced: true };
             await updateNoteLocal(updatedNote);
             break;
-            
+
           case "delete":
             await deleteNoteOnServer(note.id, note.user_id);
             break;
@@ -101,33 +103,41 @@ export async function syncNotesWithServer(): Promise<{
         await removeSyncQueueItem(item.id);
         stats.synced++;
 
-        console.log(`[NotesSync] ✓ Successfully synced ${operation} for note ${note.id}`);
+        console.log(
+          `[NotesSync] ✓ Successfully synced ${operation} for note ${note.id}`
+        );
       } catch (error: any) {
         console.error(`[NotesSync] ✗ Failed to sync item:`, error);
         stats.failed++;
-        
+
         // If it's a 404, the note might have been deleted on server
         if (error.message?.includes("404") && item.operation !== "delete") {
-          console.log(`[NotesSync] Note ${item.note.id} not found on server, removing from queue`);
+          console.log(
+            `[NotesSync] Note ${item.note.id} not found on server, removing from queue`
+          );
           await removeSyncQueueItem(item.id);
         }
       }
     }
 
     console.log("[NotesSync] Sync completed:", stats);
-    
+
     // Dispatch sync complete event
     window.dispatchEvent(new CustomEvent("sync:complete", { detail: stats }));
-    
+
     return stats;
   } catch (error) {
     console.error("[NotesSync] Fatal error during sync:", error);
-    
+
     // Dispatch sync error event
-    window.dispatchEvent(new CustomEvent("sync:error", { 
-      detail: { message: error instanceof Error ? error.message : "Unknown error" }
-    }));
-    
+    window.dispatchEvent(
+      new CustomEvent("sync:error", {
+        detail: {
+          message: error instanceof Error ? error.message : "Unknown error",
+        },
+      })
+    );
+
     throw error;
   }
 }
@@ -144,30 +154,75 @@ export async function registerBackgroundSync() {
   }
 }
 
+// FIXED: Properly mark server notes as synced and handle deletions
 export async function pullNotesFromServer(): Promise<Note[]> {
   try {
     console.log("[NotesSync] Pulling notes from server...");
     const serverNotes = await fetchNotes(USER_ID);
     console.log(`[NotesSync] Pulled ${serverNotes.length} notes from server`);
-    
+
     // Get local notes to check what exists
     const localNotes = await getAllNotes(USER_ID);
-    const localNotesMap = new Map(localNotes.map(n => [n.id, n]));
-    
-    // Only return notes that don't exist locally or are different
-    const newOrUpdatedNotes = serverNotes.filter(serverNote => {
+    const localNotesMap = new Map(localNotes.map((n) => [n.id, n]));
+    const serverNotesMap = new Map(serverNotes.map((n) => [n.id, n]));
+
+    const notesToProcess: Note[] = [];
+
+    // Process server notes - add new or update existing
+    for (const serverNote of serverNotes) {
       const localNote = localNotesMap.get(serverNote.id);
-      
-      if (!localNote) return true; // New note
-      
-      // Check if server version is newer
-      const serverTime = new Date(serverNote.modified_at).getTime();
-      const localTime = new Date(localNote.modified_at).getTime();
-      
-      return serverTime > localTime && localNote.synced;
-    });
-    
-    return newOrUpdatedNotes;
+
+      if (!localNote) {
+        // New note from server - add to local with synced status
+        console.log(`[NotesSync] New note from server: ${serverNote.id}`);
+        const syncedNote = { ...serverNote, synced: true };
+        await addNoteLocal(syncedNote);
+        notesToProcess.push(syncedNote);
+      } else {
+        // Note exists locally - check if server version is newer
+        const serverTime = new Date(serverNote.modified_at).getTime();
+        const localTime = new Date(localNote.modified_at).getTime();
+
+        // Only update if server is newer AND local is already synced
+        // (don't overwrite local unsynced changes)
+        if (serverTime > localTime && localNote.synced) {
+          console.log(
+            `[NotesSync] Updating local note with newer server version: ${serverNote.id}`
+          );
+          const syncedNote = { ...serverNote, synced: true };
+          await updateNoteLocal(syncedNote);
+          notesToProcess.push(syncedNote);
+        } else if (localNote.synced === false) {
+          console.log(
+            `[NotesSync] Skipping update for ${serverNote.id} - local has unsynced changes`
+          );
+        } else {
+          // Local and server are in sync, ensure synced flag is set
+          if (!localNote.synced) {
+            console.log(`[NotesSync] Marking note as synced: ${serverNote.id}`);
+            const syncedNote = { ...localNote, synced: true };
+            await updateNoteLocal(syncedNote);
+            notesToProcess.push(syncedNote);
+          }
+        }
+      }
+    }
+
+    // CRITICAL: Handle deletions - remove local notes that don't exist on server
+    // But only if they're already synced (don't delete unsynced local notes)
+    for (const localNote of localNotes) {
+      if (!serverNotesMap.has(localNote.id) && localNote.synced) {
+        console.log(
+          `[NotesSync] ⚠️  Note ${localNote.id} deleted on server, removing from local`
+        );
+        await deleteNote(localNote.id, USER_ID);
+      }
+    }
+
+    console.log(
+      `[NotesSync] Processed ${notesToProcess.length} notes from server`
+    );
+    return notesToProcess;
   } catch (error) {
     console.error("[NotesSync] Error pulling notes from server:", error);
     return [];
@@ -177,14 +232,16 @@ export async function pullNotesFromServer(): Promise<Note[]> {
 export async function fullSync(): Promise<void> {
   try {
     console.log("[NotesSync] Starting full synchronization...");
-    
+
     // 1. Push local changes to server
     await syncNotesWithServer();
-    
+
     // 2. Pull server changes
     const serverNotes = await pullNotesFromServer();
-    
-    console.log(`[NotesSync] Full sync complete. ${serverNotes.length} notes updated from server`);
+
+    console.log(
+      `[NotesSync] Full sync complete. ${serverNotes.length} notes updated from server`
+    );
   } catch (error) {
     console.error("[NotesSync] Full sync failed:", error);
     throw error;
