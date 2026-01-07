@@ -1,4 +1,3 @@
-// lib/storage-hook.ts - FIXED WITH PROPER STATE UPDATES
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
@@ -59,9 +58,41 @@ export function useNotes() {
       const localNotes = await getAllNotes(USER_ID);
       setNotes(localNotes);
 
-      // Then try to sync with server if online
+      // Then sync with server if online
       if (navigator.onLine) {
+        console.log("[NotesSync] Online - fetching from server...");
+
+        // Pull notes from server
+        const serverNotes = await pullNotesFromServer();
+
+        // Add server notes to local IndexedDB if they don't exist
+        for (const serverNote of serverNotes) {
+          const localNote = localNotes.find((n) => n.id === serverNote.id);
+
+          if (!localNote) {
+            // New note from server - add to local
+            console.log(
+              `[NotesSync] Adding server note ${serverNote.id} to local`
+            );
+            const noteWithSyncStatus = { ...serverNote, synced: true };
+            await addNote(noteWithSyncStatus);
+          } else if (
+            new Date(serverNote.modified_at).getTime() >
+            new Date(localNote.modified_at).getTime()
+          ) {
+            // Server version is newer - update local
+            console.log(
+              `[NotesSync] Updating local note ${serverNote.id} with server version`
+            );
+            const noteWithSyncStatus = { ...serverNote, synced: true };
+            await updateNote(noteWithSyncStatus);
+          }
+        }
+
+        // Push any unsynced local changes to server
         await syncNotes();
+      } else {
+        console.log("[NotesSync] Offline - using local data only");
       }
     } catch (err) {
       console.error("[NotesSync] Error loading notes:", err);
@@ -224,7 +255,6 @@ export function useNotes() {
     syncNotes,
   };
 }
-
 // "use client";
 
 // import { useEffect, useState, useCallback } from "react";

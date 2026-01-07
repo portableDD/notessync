@@ -29,8 +29,8 @@ export function ApiDebug() {
 
   const envVars = {
     url: process.env.NEXT_PUBLIC_SUPABASE_URL || "❌ Not set",
-    key: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      ? `✓ Set (${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.slice(0, 20)}...)`
+    key: process.env.SUPABASE_ANON_KEY
+      ? `✓ Set (${process.env.SUPABASE_ANON_KEY.slice(0, 20)}...)`
       : "❌ Not set",
   };
 
