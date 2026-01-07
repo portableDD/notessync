@@ -12,6 +12,7 @@ import { Plus, Menu, X } from "lucide-react";
 import { useSearch } from "@/hook/use-search";
 import { NotesGrid } from "./notes-grid";
 import { SearchFilters } from "./search-filter";
+import { SyncDebugPanel } from "./sync-debug-panel";
 
 const USER_ID = "emmanueltemitopedorcas20@gmail.com";
 
@@ -29,7 +30,7 @@ function NotesAppContent() {
   // This ensures it's always up-to-date without causing cascading renders
   const selectedNote = useMemo(() => {
     if (!selectedNoteId) return null;
-    return notes.find(n => n.id === selectedNoteId) || null;
+    return notes.find((n) => n.id === selectedNoteId) || null;
   }, [notes, selectedNoteId]);
 
   const handleCreateNote = async () => {
@@ -42,7 +43,7 @@ function NotesAppContent() {
       modified_at: new Date().toISOString(),
       synced: false,
     };
-    
+
     try {
       await createNote(newNote);
       // Open the editor with the new note immediately
@@ -129,8 +130,10 @@ function NotesAppContent() {
               ) : (
                 notes
                   .slice()
-                  .sort((a, b) => 
-                    new Date(b.modified_at).getTime() - new Date(a.modified_at).getTime()
+                  .sort(
+                    (a, b) =>
+                      new Date(b.modified_at).getTime() -
+                      new Date(a.modified_at).getTime()
                   )
                   .slice(0, 5)
                   .map((note) => (
@@ -178,12 +181,15 @@ function NotesAppContent() {
         {!selectedNote && (
           <header className="border-b border-border bg-card p-4 md:p-6 shrink-0">
             <div className="flex items-center gap-4 mb-4">
-              <button onClick={() => setSidebarOpen(true)} className="md:hidden">
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className="md:hidden"
+              >
                 <Menu className="w-6 h-6" />
               </button>
               <h2 className="text-lg font-semibold">All Notes</h2>
               <span className="text-sm text-muted-foreground ml-auto">
-                {notes.length} {notes.length === 1 ? 'note' : 'notes'}
+                {notes.length} {notes.length === 1 ? "note" : "notes"}
               </span>
             </div>
             <SearchFilters
@@ -218,6 +224,7 @@ function NotesAppContent() {
 
       {/* Sync status indicator */}
       <SyncStatusModal />
+      <SyncDebugPanel />
     </div>
   );
 }
