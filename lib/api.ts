@@ -3,7 +3,7 @@ import type { Note } from "@/types/note";
 
 // Validate environment variables
 const API_BASE = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const API_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const API_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!API_BASE || !API_KEY) {
   console.error("❌ Missing environment variables:", {
@@ -71,7 +71,15 @@ export async function fetchNotes(userId: string): Promise<Note[]> {
 
     const data = await response.json();
     console.log(`[API] ✓ Fetched ${data.length} notes successfully`);
-    return data;
+
+    // CRITICAL: Add synced: true to all notes from server
+    // Notes from server are by definition synced
+    const notesWithSyncStatus = data.map((note: Note) => ({
+      ...note,
+      synced: true,
+    }));
+
+    return notesWithSyncStatus;
   } catch (error) {
     console.error("[API] Error fetching notes:", error);
 
@@ -101,8 +109,7 @@ export async function createNoteOnServer(note: Note): Promise<Note> {
 
     const url = `${API_BASE}/rest/v1/notes`;
 
-    // Prepare note data (exclude synced field for server)
-    // Ensure title and content have at least some value (use "Untitled" and space for empty)
+    // CRITICAL: Remove 'synced' field - it's not part of the database schema
     const { synced, ...noteData } = note;
     const dataToSend = {
       ...noteData,
@@ -123,7 +130,9 @@ export async function createNoteOnServer(note: Note): Promise<Note> {
     const data = await response.json();
     const createdNote = Array.isArray(data) ? data[0] : data;
     console.log(`[API] ✓ Note created successfully: ${createdNote.id}`);
-    return createdNote;
+
+    // Add synced: true since it's now on the server
+    return { ...createdNote, synced: true };
   } catch (error) {
     console.error("[API] Error creating note:", error);
     throw error;
@@ -148,8 +157,7 @@ export async function updateNoteOnServer(note: Note): Promise<Note> {
       note.id
     }&user_id=eq.${encodeURIComponent(note.user_id)}`;
 
-    // Only send fields that should be updated
-    // Ensure title and content are not empty
+    // CRITICAL: Don't send 'synced' field to server - it's not in the schema
     const updateData = {
       title: note.title.trim() || "Untitled",
       content: note.content.trim() || " ",
@@ -171,13 +179,15 @@ export async function updateNoteOnServer(note: Note): Promise<Note> {
 
     if (!updatedNote) {
       console.warn(
-        `[API] ⚠ Note ${note.id} not found on server, returning local version`
+        `[API] ⚠️ Note ${note.id} not found on server, returning local version`
       );
-      return note;
+      return { ...note, synced: true };
     }
 
     console.log(`[API] ✓ Note updated successfully: ${updatedNote.id}`);
-    return updatedNote;
+
+    // Add synced: true since it's now updated on the server
+    return { ...updatedNote, synced: true };
   } catch (error) {
     console.error("[API] Error updating note:", error);
     throw error;
@@ -268,9 +278,10 @@ export async function checkConflict(localNote: Note): Promise<Note | null> {
 
     if (serverTime > localTime) {
       console.log(
-        `[API] ⚠ Conflict detected for note ${localNote.id} (server is newer)`
+        `[API] ⚠️ Conflict detected for note ${localNote.id} (server is newer)`
       );
-      return serverNote;
+      // Add synced: true to server note
+      return { ...serverNote, synced: true };
     }
 
     return null;
