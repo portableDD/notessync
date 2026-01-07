@@ -67,14 +67,26 @@ export function useNotes() {
       if (navigator.onLine) {
         console.log("[NotesSync] Online - pulling from server first...");
 
-        // Pull notes from server (adds synced: true automatically)
+        // Pull notes from server (adds synced: true automatically in api.ts)
         await pullNotesFromServer();
 
         // Load from IndexedDB to display
         const localNotes = await getAllNotes(USER_ID);
         console.log(
-          `[NotesSync] Loaded ${localNotes.length} notes from IndexedDB`
+          `[NotesSync] Loaded ${localNotes.length} notes from IndexedDB after pull`
         );
+
+        // Log each note's sync status for debugging
+        localNotes.forEach((note) => {
+          console.log(
+            `[NotesSync] Note "${note.title}" (${note.id.slice(
+              0,
+              8
+            )}...) synced:`,
+            note.synced
+          );
+        });
+
         setNotes(localNotes);
 
         // Push any unsynced local changes to server

@@ -89,8 +89,17 @@ export async function addNote(note: Note): Promise<string> {
     const transaction = db.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
 
-    // Ensure note is marked as unsynced when created
-    const noteToAdd = { ...note, synced: false };
+    // CRITICAL: Preserve the synced status from the note
+    // If synced is explicitly set (from server), keep it
+    // Otherwise, mark as unsynced (new local note)
+    const noteToAdd =
+      note.synced !== undefined ? note : { ...note, synced: false };
+
+    console.log(
+      `[NotesSync] Adding note ${note.id} to IndexedDB with synced:`,
+      noteToAdd.synced
+    );
+
     const request = store.add(noteToAdd);
 
     request.onerror = () => {
@@ -99,9 +108,13 @@ export async function addNote(note: Note): Promise<string> {
     };
 
     request.onsuccess = () => {
-      console.log(`[NotesSync] Note ${note.id} added to IndexedDB`);
-      // Add to sync queue
-      addToSyncQueue("create", noteToAdd);
+      console.log(
+        `[NotesSync] Note ${note.id} added to IndexedDB with synced: ${noteToAdd.synced}`
+      );
+      // Only add to sync queue if unsynced (new local note)
+      if (!noteToAdd.synced) {
+        addToSyncQueue("create", noteToAdd);
+      }
       resolve(request.result as string);
     };
   });
